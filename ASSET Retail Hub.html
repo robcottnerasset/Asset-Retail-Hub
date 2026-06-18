@@ -1,0 +1,989 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ASSET Retail Hub</title>
+<style>
+  html,body{margin:0;padding:0;background:#F3F3F5;}
+  #root{min-height:100vh;}
+  #boot{font-family:system-ui,sans-serif;color:#71717A;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;}
+  #boot .m{font-size:30px;font-weight:800;letter-spacing:.34em;color:#18181B;padding-left:.34em;}
+  #boot .s{margin-top:10px;font-size:13px;}
+  /* backup bar */
+  #databar{position:fixed;bottom:14px;right:14px;z-index:200;display:flex;gap:8px;font-family:system-ui,sans-serif;}
+  #databar button{font-size:12px;font-weight:600;border:1px solid #E4E3E8;background:#fff;color:#6D28D9;padding:8px 12px;border-radius:8px;cursor:pointer;box-shadow:0 4px 16px rgba(24,24,27,.10);}
+  #databar button:hover{border-color:#7C3AED;background:#EBE3FB;}
+</style>
+</head>
+<body>
+<div id="root"><div id="boot"><div class="m">ASSET</div><div class="s">Loading your Retail Hub&hellip;</div></div></div>
+
+<div id="databar">
+  <button id="backupBtn" title="Download a backup of all your data">Backup data</button>
+  <button id="restoreBtn" title="Restore data from a backup file">Restore</button>
+  <input id="restoreInput" type="file" accept="application/json" style="display:none" />
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo } = React;
+
+/* =========================================================================
+   ASSET RETAIL HUB — a persistent command center, built to mirror the live
+   Notion workspace structure (Tasks, Wholesale Pipeline, Strategy, Notes)
+   plus a Trade Show planner and a KPI dashboard. Single-user. Auto-saves
+   to your browser via localStorage.
+   ========================================================================= */
+
+/* ----------------------------- storage layer ---------------------------- */
+async function loadKey(key, fallback) {
+  try {
+    const v = localStorage.getItem(key);
+    if (v != null) return JSON.parse(v);
+    return fallback;
+  } catch (e) { return fallback; }
+}
+async function saveKey(key, val) {
+  try { localStorage.setItem(key, JSON.stringify(val)); }
+  catch (e) { console.error("save failed", key, e); }
+}
+function useCollection(key, seed) {
+  const [items, setItems] = useState(seed);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const v = await loadKey(key, null);
+      if (active) { if (v != null) setItems(v); setLoaded(true); }
+    })();
+    return () => { active = false; };
+  }, []);
+  useEffect(() => { if (loaded) saveKey(key, items); }, [items, loaded]);
+  return [items, setItems, loaded];
+}
+const uid = () =>
+  (typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID()
+    : "id" + Date.now() + Math.random().toString(16).slice(2));
+
+/* ------------------------------- palettes -------------------------------- */
+const C = {
+  gray: { bg: "#ECEAE5", fg: "#5C574E" },
+  red: { bg: "#F6DEDA", fg: "#A23B30" },
+  orange: { bg: "#F7E6D2", fg: "#9A5A1B" },
+  yellow: { bg: "#F4ECC6", fg: "#7E6A12" },
+  green: { bg: "#DCEDE1", fg: "#2C6A52" },
+  blue: { bg: "#DCE6F2", fg: "#2E5685" },
+  purple: { bg: "#EAE2FB", fg: "#6D28D9" },
+  pink: { bg: "#F6E0EA", fg: "#9C3E6B" },
+  brown: { bg: "#EDE3D7", fg: "#7A5A38" },
+};
+const tag = (name) => C[name] || C.gray;
+
+/* status / option color maps (matched to Notion) */
+const TASK_STATUS = ["To Do", "Waiting", "In Progress", "Done", "Cancelled"];
+const TASK_STATUS_C = { "To Do": "gray", "Waiting": "yellow", "In Progress": "blue", "Done": "green", "Cancelled": "gray" };
+const TASK_PRIORITY = ["🚨 Urgent", "Short-Term", "Medium-Term", "Long-Term / Ongoing", "Personal", "Distant"];
+const TASK_PRIORITY_C = { "🚨 Urgent": "red", "Short-Term": "orange", "Medium-Term": "yellow", "Long-Term / Ongoing": "blue", "Personal": "purple", "Distant": "gray" };
+const TASK_PROJECT = ["Wholesale Prospecting", "B2B Email Flow", "PRIDE Campaign", "Podcast", "Trade Shows", "Erewhon", "Faire", "Operations", "Retail Expansion (Intl)", "Personal", "Other"];
+const TASK_OWNER = ["Rob", "Lauren", "Z", "Chad", "Kym", "Other"];
+
+const PIPE_STAGE = ["1. Researching", "2. Ready to Contact", "3. Sample Sent", "4. Awaiting Response", "5. In Conversation", "6. Converted", "7. No Response", "8. Not a Fit"];
+const PIPE_STAGE_C = { "1. Researching": "gray", "2. Ready to Contact": "blue", "3. Sample Sent": "orange", "4. Awaiting Response": "yellow", "5. In Conversation": "purple", "6. Converted": "green", "7. No Response": "red", "8. Not a Fit": "gray" };
+const PIPE_CHANNEL = ["Indie Beauty", "Wellness Shop", "Spa", "Gym", "Big Box", "Tastemaker", "Other"];
+const PIPE_CHANNEL_C = { "Indie Beauty": "pink", "Wellness Shop": "green", "Spa": "purple", "Gym": "orange", "Big Box": "blue", "Tastemaker": "red", "Other": "gray" };
+const PIPE_TIER = ["Tier 1 - Priority", "Tier 2 - Strong Fit", "Tier 3 - Fill-In"];
+const PIPE_TIER_C = { "Tier 1 - Priority": "purple", "Tier 2 - Strong Fit": "blue", "Tier 3 - Fill-In": "gray" };
+const PIPE_REGION = ["CA", "NY", "TX", "FL", "IL", "WA", "CO", "Other US", "Canada", "AUS", "EU", "Estonia", "UK", "Other Intl"];
+
+const STRAT_STATUS = ["Working", "Not Working", "Watch", "TBD"];
+const STRAT_STATUS_C = { "Working": "green", "Not Working": "red", "Watch": "yellow", "TBD": "gray" };
+const STRAT_CATEGORY = ["Channel", "Account", "Activation", "Partnership", "Tactic", "Product"];
+const STRAT_CATEGORY_C = { "Channel": "purple", "Account": "blue", "Activation": "brown", "Partnership": "pink", "Tactic": "gray", "Product": "orange" };
+const STRAT_PRIORITY = ["High", "Medium", "Low"];
+const STRAT_PRIORITY_C = { "High": "red", "Medium": "orange", "Low": "gray" };
+
+const SHOW_STATUS = ["Researching", "Confirmed", "Booth Booked", "Logistics", "Live", "Wrapped"];
+const SHOW_STATUS_C = { "Researching": "gray", "Confirmed": "blue", "Booth Booked": "purple", "Logistics": "orange", "Live": "green", "Wrapped": "gray" };
+
+const NOTE_TAG = ["Meeting", "Decision", "Context", "Idea"];
+const NOTE_TAG_C = { "Meeting": "blue", "Decision": "brown", "Context": "gray", "Idea": "purple" };
+
+const SAMPLES_GOAL = 25;
+
+/* ------------------------------- field defs ------------------------------ */
+const FIELDS = {
+  tasks: [
+    { k: "title", label: "Task", type: "text", title: true, req: true },
+    { k: "status", label: "Status", type: "select", opts: TASK_STATUS, cmap: TASK_STATUS_C, def: "To Do" },
+    { k: "priority", label: "Priority", type: "select", opts: TASK_PRIORITY, cmap: TASK_PRIORITY_C, def: "Medium-Term" },
+    { k: "project", label: "Project", type: "select", opts: TASK_PROJECT, def: "Operations" },
+    { k: "owner", label: "Owner", type: "select", opts: TASK_OWNER, def: "Rob" },
+    { k: "due", label: "Due date", type: "date" },
+    { k: "notes", label: "Notes", type: "textarea" },
+  ],
+  pipeline: [
+    { k: "title", label: "Retailer name", type: "text", title: true, req: true },
+    { k: "channel", label: "Channel", type: "select", opts: PIPE_CHANNEL, cmap: PIPE_CHANNEL_C, def: "Spa" },
+    { k: "tier", label: "Tier", type: "select", opts: PIPE_TIER, cmap: PIPE_TIER_C, def: "Tier 2 - Strong Fit" },
+    { k: "stage", label: "Pipeline stage", type: "select", opts: PIPE_STAGE, cmap: PIPE_STAGE_C, def: "1. Researching" },
+    { k: "region", label: "Region", type: "select", opts: PIPE_REGION, def: "CA" },
+    { k: "city", label: "City", type: "text" },
+    { k: "buyer", label: "Buyer name", type: "text" },
+    { k: "email", label: "Buyer email", type: "email" },
+    { k: "phone", label: "Buyer phone", type: "text" },
+    { k: "website", label: "Website", type: "text" },
+    { k: "lastContact", label: "Last contact date", type: "date" },
+    { k: "sampleSent", label: "Sample sent date", type: "date" },
+    { k: "nextFollowUp", label: "Next follow-up", type: "date" },
+    { k: "notes", label: "Notes", type: "textarea" },
+  ],
+  strategy: [
+    { k: "title", label: "Item", type: "text", title: true, req: true },
+    { k: "status", label: "Status", type: "select", opts: STRAT_STATUS, cmap: STRAT_STATUS_C, def: "Watch" },
+    { k: "category", label: "Category", type: "select", opts: STRAT_CATEGORY, cmap: STRAT_CATEGORY_C, def: "Channel" },
+    { k: "priority", label: "Priority", type: "select", opts: STRAT_PRIORITY, cmap: STRAT_PRIORITY_C, def: "Medium" },
+    { k: "happening", label: "What is happening", type: "textarea" },
+    { k: "why", label: "Why it works / does not work", type: "textarea" },
+    { k: "action", label: "Action / next step", type: "textarea" },
+    { k: "reviewed", label: "Last reviewed", type: "date" },
+  ],
+  shows: [
+    { k: "title", label: "Show name", type: "text", title: true, req: true },
+    { k: "status", label: "Status", type: "select", opts: SHOW_STATUS, cmap: SHOW_STATUS_C, def: "Researching" },
+    { k: "date", label: "Show date", type: "date" },
+    { k: "location", label: "Location", type: "text" },
+    { k: "budget", label: "Budget", type: "text" },
+    { k: "goal", label: "Goal", type: "text" },
+    { k: "notes", label: "Notes", type: "textarea" },
+  ],
+  notes: [
+    { k: "title", label: "Title", type: "text", title: true, req: true },
+    { k: "tag", label: "Type", type: "select", opts: NOTE_TAG, cmap: NOTE_TAG_C, def: "Meeting" },
+    { k: "date", label: "Date", type: "date" },
+    { k: "body", label: "Notes", type: "textarea", big: true },
+  ],
+};
+
+/* --------------------------------- seeds --------------------------------- */
+const today = () => new Date().toISOString().slice(0, 10);
+const SEED = {
+  priorities: [
+    "Drive Spa Forward",
+    "Support Auxiliary Sales & Secondary Channels",
+    "Prime to Scale & Budget for 2026 & 2027",
+  ],
+  tasks: [
+    { id: uid(), title: "Build lead intake form for Vegas (BeWell 2026)", status: "In Progress", priority: "🚨 Urgent", project: "Trade Shows", owner: "Rob", due: "2026-06-17", notes: "Must be complete by 06.17." },
+    { id: uid(), title: "Purchase 10x10 rug for booth", status: "To Do", priority: "Short-Term", project: "Trade Shows", owner: "Rob", due: "2026-06-17", notes: "" },
+    { id: uid(), title: "Add Refersion for B2B affiliate", status: "To Do", priority: "Short-Term", project: "B2B Email Flow", owner: "Rob", due: "", notes: "" },
+    { id: uid(), title: "Compile list of retailers: Future Method & Pure For Men", status: "To Do", priority: "🚨 Urgent", project: "Wholesale Prospecting", owner: "Rob", due: "", notes: "URGENT, needs done ASAP." },
+    { id: uid(), title: "Add Lauren's retail flow / how to order doc", status: "To Do", priority: "🚨 Urgent", project: "Operations", owner: "Rob", due: "2026-06-15", notes: "Due today." },
+    { id: uid(), title: "Review and send back shelf talker version from Chad", status: "To Do", priority: "Short-Term", project: "Operations", owner: "Rob", due: "2026-06-18", notes: "Chad sent a version. Review and send back." },
+    { id: uid(), title: "Create print-outs for Vegas: EDU deck, show specials, order forms, field how-to", status: "To Do", priority: "🚨 Urgent", project: "Trade Shows", owner: "Rob", due: "2026-06-19", notes: "Review for additional docs needed." },
+    { id: uid(), title: "Create Chicago email blast for Wax Man Spa", status: "To Do", priority: "Medium-Term", project: "B2B Email Flow", owner: "Rob", due: "2026-07-31", notes: "Blocker: get date from Julio, add to info, send to Lauren for creation." },
+    { id: uid(), title: "August private trade show: send samples, arrange Stacey attendance", status: "In Progress", priority: "Short-Term", project: "Trade Shows", owner: "Rob", due: "", notes: "Initial convo complete. Send samples and goodies, arrange Stacey to attend in Rob's place." },
+    { id: uid(), title: "Podcast: produce questions to be asked", status: "In Progress", priority: "Short-Term", project: "Podcast", owner: "Rob", due: "", notes: "Podcast scheduled. Produce the questions Rob wants to be asked." },
+    { id: uid(), title: "Add daily check-in skill to Claude (9am, 1pm, 3:30pm PST weekdays)", status: "To Do", priority: "Short-Term", project: "Operations", owner: "Rob", due: "", notes: "Check-ins at 9am, 1pm, and 3:30pm PST weekdays. Build after the to-do list is finalized." },
+    { id: uid(), title: "Get Chad artwork revisions on current skin SKUs", status: "To Do", priority: "Short-Term", project: "Operations", owner: "Rob", due: "", notes: "" },
+    { id: uid(), title: "Send Chad premium sample examples", status: "To Do", priority: "Short-Term", project: "Operations", owner: "Rob", due: "", notes: "" },
+    { id: uid(), title: "Add additional attendees to Vegas show", status: "To Do", priority: "🚨 Urgent", project: "Trade Shows", owner: "Rob", due: "", notes: "" },
+    { id: uid(), title: "Sign DocuSign for the show", status: "To Do", priority: "🚨 Urgent", project: "Trade Shows", owner: "Rob", due: "", notes: "Likely gates the booth." },
+  ],
+  pipeline: [
+    { id: uid(), title: "Cosmetic Market - Nashville Corp Office", channel: "Indie Beauty", tier: "Tier 3 - Fill-In", stage: "1. Researching", region: "TX", city: "Dallas", email: "contact@thecosmeticmarket.com", phone: "615-292-9455" },
+    { id: uid(), title: "Follain (now part of Credo)", channel: "Indie Beauty", tier: "Tier 3 - Fill-In", stage: "1. Researching", region: "Other US", city: "Online", notes: "Is a corporate chain." },
+    { id: uid(), title: "The Well", channel: "Wellness Shop", tier: "Tier 2 - Strong Fit", stage: "1. Researching", region: "Other US", city: "Multiple (Boston, NYC, LA)", website: "the-well.com", notes: "Site does not seem to be functioning." },
+    { id: uid(), title: "Joanna Czech Studio LA", channel: "Spa", tier: "Tier 2 - Strong Fit", stage: "1. Researching", region: "CA", city: "Los Angeles", website: "joannaczech.com" },
+    { id: uid(), title: "Beauty Heroes", channel: "Indie Beauty", tier: "Tier 1 - Priority", stage: "2. Ready to Contact", region: "CA", city: "Novato (San Francisco area)", website: "beauty-heroes.com", lastContact: "2026-05-17", notes: "Applied through portal (online). Entered into Monday." },
+    { id: uid(), title: "Catbird", channel: "Indie Beauty", tier: "Tier 3 - Fill-In", stage: "1. Researching", region: "NY", city: "Brooklyn", website: "catbirdnyc.com", notes: "Possibly not the right fit." },
+    { id: uid(), title: "Lena Rose Beauty", channel: "Indie Beauty", tier: "Tier 2 - Strong Fit", stage: "1. Researching", region: "IL", city: "Chicago", website: "lenarosebeauty.com", notes: "Need to apply through portal: lenarosebeauty.com/pages/work" },
+    { id: uid(), title: "Live Healthlife", channel: "Indie Beauty", tier: "Tier 3 - Fill-In", stage: "1. Researching", region: "FL", city: "Various (online)", website: "livehealthlife.com", buyer: "Latat" },
+    { id: uid(), title: "Flower Power Herbs & Roots", channel: "Wellness Shop", tier: "Tier 3 - Fill-In", stage: "1. Researching", region: "NY", city: "New York (East Village)", email: "flowerpowerherbs@gmail.com", phone: "(212) 982-6664", website: "flowerpower.net", lastContact: "2026-05-19" },
+    { id: uid(), title: "Larchmont Beauty Center", channel: "Indie Beauty", tier: "Tier 2 - Strong Fit", stage: "1. Researching", region: "CA", city: "Los Angeles (Larchmont)", email: "info@larchmontbeauty.com", buyer: "None given (possibly owners)", lastContact: "2026-05-19" },
+    { id: uid(), title: "Heyday Skincare", channel: "Spa", tier: "Tier 2 - Strong Fit", stage: "1. Researching", region: "Other US", city: "Multiple US cities", website: "heydayskincare.com", notes: "Emailed asking for brand submission." },
+    { id: uid(), title: "Olive & June", channel: "Tastemaker", tier: "Tier 3 - Fill-In", stage: "1. Researching", region: "CA", city: "Online (LA-based)", notes: "Not a fit (nail polish store)." },
+    { id: uid(), title: "BLUSH Beauty Houston", channel: "Indie Beauty", tier: "Tier 3 - Fill-In", stage: "1. Researching", region: "TX", city: "Houston", notes: "Not a fit (mainly female medical spa)." },
+    { id: uid(), title: "SkinSpirit", channel: "Wellness Shop", tier: "Tier 3 - Fill-In", stage: "1. Researching", region: "CA", city: "Marin County, CA", phone: "(855) 383-7546", website: "skinspirit.com", lastContact: "2026-05-19" },
+    { id: uid(), title: "Violet Grey", channel: "Tastemaker", tier: "Tier 1 - Priority", stage: "1. Researching", region: "Other US", city: "Online", website: "violetgrey.com", lastContact: "2026-05-19" },
+    { id: uid(), title: "Love Peace Organic", channel: "Indie Beauty", tier: "Tier 3 - Fill-In", stage: "1. Researching", region: "Other US", city: "Online (Milwaukee-based)", website: "lovepeaceorganic.com", lastContact: "2026-05-19", notes: "Submitted over online portal. Entered into Monday." },
+    { id: uid(), title: "Birchbox (premium clean)", channel: "Tastemaker", tier: "Tier 3 - Fill-In", stage: "1. Researching", region: "NY", city: "New York / Online" },
+    { id: uid(), title: "Nest", channel: "Indie Beauty", tier: "Tier 3 - Fill-In", stage: "1. Researching", region: "CA", city: "San Francisco / Pacific Heights" },
+    { id: uid(), title: "Thompson Alchemists", channel: "Wellness Shop", tier: "Tier 2 - Strong Fit", stage: "1. Researching", region: "NY", city: "New York (SoHo)", email: "thomchem@msn.com", website: "thompsonalchemists.com" },
+    { id: uid(), title: "The Detox Market", channel: "Indie Beauty", tier: "Tier 1 - Priority", stage: "2. Ready to Contact", region: "CA", city: "Los Angeles", email: "buyers@thedetoxmarket.com", website: "thedetoxmarket.com" },
+    { id: uid(), title: "NGT", channel: "Other", tier: "Tier 2 - Strong Fit", stage: "3. Sample Sent", region: "Estonia", city: "Estonia", buyer: "Erika", lastContact: "2026-05-18" },
+    { id: uid(), title: "BLUSH Beauty Bar Austin", channel: "Indie Beauty", tier: "Tier 3 - Fill-In", stage: "1. Researching", region: "TX", city: "Austin", email: "blushbeautyinfo@gmail.com", phone: "707-319-9846" },
+    { id: uid(), title: "GENERAL STORE Venice", channel: "Wellness Shop", tier: "Tier 2 - Strong Fit", stage: "1. Researching", region: "CA", city: "Venice, CA", email: "sales@shop-generalstore.com", phone: "310.751.6393", website: "shop-generalstore.com", notes: "Carries variety, has a store in Venice CA." },
+    { id: uid(), title: "MIA Apothecary", channel: "Wellness Shop", tier: "Tier 3 - Fill-In", stage: "1. Researching", region: "FL", city: "Miami" },
+    { id: uid(), title: "Goop", channel: "Tastemaker", tier: "Tier 1 - Priority", stage: "1. Researching", region: "CA", city: "Online (LA-based)", email: "buyers@goop.com", website: "goop.com", notes: "Entered into Monday." },
+    { id: uid(), title: "Mzia Shiman Spa", channel: "Spa", tier: "Tier 3 - Fill-In", stage: "1. Researching", region: "NY", city: "New York / TriBeCa" },
+    { id: uid(), title: "Maido (Florida Keys)", channel: "Indie Beauty", tier: "Tier 3 - Fill-In", stage: "1. Researching", region: "FL", city: "Florida Keys" },
+    { id: uid(), title: "Shen Beauty", channel: "Indie Beauty", tier: "Tier 1 - Priority", stage: "1. Researching", region: "NY", city: "Brooklyn (Cobble Hill)", website: "shen-beauty.com" },
+    { id: uid(), title: "The Alchemist's Kitchen", channel: "Wellness Shop", tier: "Tier 2 - Strong Fit", stage: "1. Researching", region: "NY", city: "New York (Bowery)", website: "thealchemistskitchen.com" },
+    { id: uid(), title: "Maine & Crawford", channel: "Indie Beauty", tier: "Tier 3 - Fill-In", stage: "1. Researching", region: "NY", city: "Brooklyn" },
+    { id: uid(), title: "The WELL Miami Shop", channel: "Wellness Shop", tier: "Tier 3 - Fill-In", stage: "1. Researching", region: "FL", city: "Miami / Wynwood" },
+    { id: uid(), title: "The Detox Market Canada", channel: "Indie Beauty", tier: "Tier 1 - Priority", stage: "1. Researching", region: "Canada", city: "Toronto", website: "ca.thedetoxmarket.com", notes: "Covered below." },
+    { id: uid(), title: "Ailea", channel: "Indie Beauty", tier: "Tier 2 - Strong Fit", stage: "1. Researching", region: "CO", city: "Denver / Online", website: "ailea.com" },
+    { id: uid(), title: "Kate Somerville Skin Health Experts", channel: "Spa", tier: "Tier 2 - Strong Fit", stage: "1. Researching", region: "CA", city: "Beverly Hills, CA", website: "katesomerville.com" },
+    { id: uid(), title: "Aspen Apothecary", channel: "Wellness Shop", tier: "Tier 3 - Fill-In", stage: "1. Researching", region: "CO", city: "Aspen, CO + Online" },
+    { id: uid(), title: "Credo Beauty", channel: "Indie Beauty", tier: "Tier 1 - Priority", stage: "2. Ready to Contact", region: "CA", city: "Los Angeles (Larchmont) + multi", email: "brandsubmissions@credobeauty.com", website: "credobeauty.com" },
+    { id: uid(), title: "Evolue", channel: "Indie Beauty", tier: "Tier 2 - Strong Fit", stage: "1. Researching", region: "CA", city: "Los Angeles" },
+    { id: uid(), title: "CAP Beauty", channel: "Wellness Shop", tier: "Tier 3 - Fill-In", stage: "1. Researching", region: "NY", city: "New York (West Village)", website: "capbeauty.com" },
+    { id: uid(), title: "Santi Senti (formerly oo35mm)", channel: "Indie Beauty", tier: "Tier 2 - Strong Fit", stage: "1. Researching", region: "NY", city: "New York (Mott St, Chinatown)", website: "sentisenti.com", notes: "Submitted over portal." },
+    { id: uid(), title: "Beautyque NYC", channel: "Indie Beauty", tier: "Tier 3 - Fill-In", stage: "4. Awaiting Response", region: "NY", city: "New York", website: "beautyque.nyc", notes: "Submitted over portal." },
+    { id: uid(), title: "Erewhon Market", channel: "Wellness Shop", tier: "Tier 1 - Priority", stage: "2. Ready to Contact", region: "CA", city: "Los Angeles (multiple)", email: "maren@erewhon.com", buyer: "Maren Guiliano", website: "erewhonmarket.com", lastContact: "2026-05-05", nextFollowUp: "2026-05-15" },
+    { id: uid(), title: "Kindred Black", channel: "Tastemaker", tier: "Tier 2 - Strong Fit", stage: "1. Researching", region: "Other US", city: "Online (LA-based)", website: "kindredblack.com", notes: "Not a fit." },
+    { id: uid(), title: "Nourished Life", channel: "Wellness Shop", tier: "Tier 2 - Strong Fit", stage: "1. Researching", region: "AUS", city: "Sydney / Melbourne", website: "nourishedlife.com.au" },
+    { id: uid(), title: "Clementine Fields", channel: "Wellness Shop", tier: "Tier 1 - Priority", stage: "1. Researching", region: "Canada", city: "Toronto / Vancouver", website: "clementinefields.ca" },
+    { id: uid(), title: "Glisten Skin & Inc", channel: "Spa", tier: "", stage: "6. Converted", region: "", city: "", lastContact: "2026-05-08", notes: "Converted account." },
+    { id: uid(), title: "Natural Supply Co", channel: "Indie Beauty", tier: "Tier 2 - Strong Fit", stage: "1. Researching", region: "AUS", city: "Sydney", notes: "Out of area." },
+  ],
+  strategy: [
+    { id: uid(), title: "Spa channel momentum", status: "Working", category: "Channel", priority: "High", happening: "Spa is responsive to sampling and converting faster than other channels.", why: "Strong product fit with treatment add-ons and retail shelves.", action: "Double down. Build a spa-specific outreach push.", reviewed: today() },
+    { id: uid(), title: "Cold big-box outreach", status: "Watch", category: "Channel", priority: "Medium", happening: "Long cycles, slow responses from big box buyers.", why: "Process-heavy and not a near-term volume driver.", action: "Keep warm, do not over-invest this quarter.", reviewed: today() },
+    { id: uid(), title: "Generic email blasts", status: "Not Working", category: "Tactic", priority: "Low", happening: "Untargeted sends underperform on reply rate.", why: "No segmentation by channel or tier.", action: "Replace with the new segmented B2B email flow.", reviewed: today() },
+  ],
+  shows: [
+    { id: uid(), title: "Example Trade Show 2026", status: "Researching", date: "", location: "", budget: "", goal: "Build wholesale pipeline and book buyer meetings.", notes: "Placeholder. Add real shows as you confirm them." },
+  ],
+  notes: [
+    { id: uid(), title: "Welcome to your Retail Hub", tag: "Context", date: today(), body: "This is your single source of truth, rebuilt inside Claude.\n\nEvery dropdown matches your live Notion structure. Sample rows are clearly labeled and safe to delete.\n\nUse the + button in any module to add records. Everything saves automatically and persists between sessions." },
+  ],
+};
+
+/* ------------------------------- UI helpers ------------------------------ */
+function Badge({ value, cmap, fallback }) {
+  if (!value) return <span className="muted">—</span>;
+  const c = tag((cmap && cmap[value]) || fallback || "gray");
+  return <span className="badge" style={{ background: c.bg, color: c.fg }}>{value}</span>;
+}
+function fmtDate(d) {
+  if (!d) return "";
+  try {
+    const dt = new Date(d + "T00:00:00");
+    return dt.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  } catch { return d; }
+}
+function startOfWeek() {
+  const n = new Date();
+  const day = (n.getDay() + 6) % 7; // Monday = 0
+  n.setHours(0, 0, 0, 0);
+  n.setDate(n.getDate() - day);
+  return n;
+}
+
+/* -------------------------------- modal ---------------------------------- */
+function EditModal({ kind, record, onSave, onClose }) {
+  const fields = FIELDS[kind];
+  const blank = useMemo(() => {
+    const o = { id: uid() };
+    fields.forEach((f) => (o[f.k] = f.def || ""));
+    return o;
+  }, [kind]);
+  const [form, setForm] = useState(record ? { ...record } : blank);
+  const titleField = fields.find((f) => f.title);
+  const valid = !titleField || (form[titleField.k] || "").trim().length > 0;
+  const set = (k, v) => setForm((s) => ({ ...s, [k]: v }));
+
+  return (
+    <div className="overlay" onMouseDown={onClose}>
+      <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <span className="eyebrow">{record ? "Edit record" : "New record"}</span>
+          <button className="icon-btn" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        <div className="modal-body">
+          {fields.map((f) => (
+            <label className="field" key={f.k}>
+              <span className="field-label">{f.label}{f.req ? " *" : ""}</span>
+              {f.type === "select" ? (
+                <select value={form[f.k] || ""} onChange={(e) => set(f.k, e.target.value)}>
+                  <option value="">—</option>
+                  {f.opts.map((o) => <option key={o} value={o}>{o}</option>)}
+                </select>
+              ) : f.type === "textarea" ? (
+                <textarea rows={f.big ? 8 : 3} value={form[f.k] || ""} onChange={(e) => set(f.k, e.target.value)} />
+              ) : (
+                <input type={f.type === "date" ? "date" : f.type === "email" ? "email" : "text"}
+                  value={form[f.k] || ""} onChange={(e) => set(f.k, e.target.value)} />
+              )}
+            </label>
+          ))}
+        </div>
+        <div className="modal-foot">
+          <button className="btn ghost" onClick={onClose}>Cancel</button>
+          <button className="btn primary" disabled={!valid} onClick={() => onSave(form)}>Save</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------ table view ------------------------------- */
+function DataTable({ rows, cols, onEdit, onDelete }) {
+  if (!rows.length)
+    return <div className="empty">Nothing here yet. Use <b>New</b> to add your first record.</div>;
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>{cols.map((c) => <th key={c.k} style={c.w ? { width: c.w } : null}>{c.label}</th>)}<th className="row-actions-h"></th></tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.id} onClick={() => onEdit(r)}>
+              {cols.map((c) => <td key={c.k}>{c.render ? c.render(r) : (r[c.k] || <span className="muted">—</span>)}</td>)}
+              <td className="row-actions" onClick={(e) => e.stopPropagation()}>
+                <button className="icon-btn sm" title="Delete" onClick={() => onDelete(r.id)}>🗑</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/* --------------------------------- app ----------------------------------- */
+function App() {
+  const [view, setView] = useState("dashboard");
+  const [pipeMode, setPipeMode] = useState("board");
+  const [taskFilter, setTaskFilter] = useState("All");
+  const [pipeFilter, setPipeFilter] = useState("All");
+  const [editing, setEditing] = useState(null); // {kind, record}
+  const [noteSel, setNoteSel] = useState(null);
+
+  const [priorities, setPriorities, lp] = useCollection("asset:priorities", SEED.priorities);
+  const [tasks, setTasks, lt] = useCollection("asset:tasks:v3", SEED.tasks);
+  const [pipeline, setPipeline, lpi] = useCollection("asset:pipeline:v2", SEED.pipeline);
+  const [strategy, setStrategy, ls] = useCollection("asset:strategy", SEED.strategy);
+  const [shows, setShows, lsh] = useCollection("asset:shows", SEED.shows);
+  const [notes, setNotes, ln] = useCollection("asset:notes", SEED.notes);
+  const ready = lp && lt && lpi && ls && lsh && ln;
+
+  const setters = { tasks: setTasks, pipeline: setPipeline, strategy: setStrategy, shows: setShows, notes: setNotes };
+  const data = { tasks, pipeline, strategy, shows, notes };
+
+  const saveRecord = (kind, form) => {
+    setters[kind]((arr) => {
+      const exists = arr.some((x) => x.id === form.id);
+      return exists ? arr.map((x) => (x.id === form.id ? form : x)) : [form, ...arr];
+    });
+    setEditing(null);
+  };
+  const deleteRecord = (kind, id) => setters[kind]((arr) => arr.filter((x) => x.id !== id));
+  const markSample = (id) => setPipeline((arr) => arr.map((p) => {
+    if (p.id !== id) return p;
+    const advance = PIPE_STAGE.indexOf(p.stage) < PIPE_STAGE.indexOf("3. Sample Sent");
+    return { ...p, sampleSent: today(), stage: advance ? "3. Sample Sent" : p.stage };
+  }));
+
+  /* KPI computations */
+  const kpi = useMemo(() => {
+    const sow = startOfWeek();
+    const samplesThisWeek = pipeline.filter((p) => {
+      if (!p.sampleSent) return false;
+      const d = new Date(p.sampleSent + "T00:00:00");
+      return d >= sow;
+    }).length;
+    const touchesThisWeek = pipeline.filter((p) => {
+      if (!p.lastContact) return false;
+      const d = new Date(p.lastContact + "T00:00:00");
+      return d >= sow;
+    }).length;
+    const stageCounts = {};
+    PIPE_STAGE.forEach((s) => (stageCounts[s] = 0));
+    pipeline.forEach((p) => { if (p.stage in stageCounts) stageCounts[p.stage]++; });
+    const converted = stageCounts["6. Converted"] || 0;
+    const active = pipeline.filter((p) => !["6. Converted", "7. No Response", "8. Not a Fit"].includes(p.stage)).length;
+    const taskCounts = {};
+    TASK_STATUS.forEach((s) => (taskCounts[s] = 0));
+    tasks.forEach((t) => { if (t.status in taskCounts) taskCounts[t.status]++; });
+    const openTasks = (taskCounts["To Do"] || 0) + (taskCounts["In Progress"] || 0) + (taskCounts["Waiting"] || 0);
+    const working = strategy.filter((s) => s.status === "Working").length;
+    const notWorking = strategy.filter((s) => s.status === "Not Working").length;
+    return { samplesThisWeek, touchesThisWeek, stageCounts, converted, active, openTasks, taskCounts, working, notWorking };
+  }, [pipeline, tasks, strategy]);
+
+  if (!ready)
+    return (
+      <div className="boot"><style>{CSS}</style>
+        <div className="boot-mark">ASSET</div>
+        <div className="boot-sub">Loading your Retail Hub…</div>
+      </div>
+    );
+
+  const NAV = [
+    { k: "dashboard", label: "Dashboard", icon: "◧" },
+    { k: "pipeline", label: "Pipeline", icon: "▤" },
+    { k: "tasks", label: "Tasks", icon: "✓" },
+    { k: "strategy", label: "Strategy", icon: "◆" },
+    { k: "shows", label: "Trade Shows", icon: "▣" },
+    { k: "notes", label: "Notes", icon: "✎" },
+  ];
+
+  return (
+    <div className="app"><style>{CSS}</style>
+
+      {/* RAIL */}
+      <aside className="rail">
+        <div className="brand">
+          <div className="wordmark">ASSET</div>
+          <div className="brand-sub">Retail Hub</div>
+        </div>
+        <nav className="nav">
+          {NAV.map((n) => (
+            <button key={n.k} className={"nav-item" + (view === n.k ? " active" : "")} onClick={() => setView(n.k)}>
+              <span className="nav-icon">{n.icon}</span>{n.label}
+            </button>
+          ))}
+        </nav>
+        <div className="rail-foot">
+          <button className="reset" onClick={() => {
+            if (confirm("Clear all sample data and start empty? This cannot be undone.")) {
+              setTasks([]); setPipeline([]); setStrategy([]); setShows([]);
+              setNotes([]); setPriorities(["", "", ""]);
+            }
+          }}>Clear sample data</button>
+        </div>
+      </aside>
+
+      {/* MAIN */}
+      <main className="main">
+        {view === "dashboard" && (
+          <Dashboard kpi={kpi} priorities={priorities} setPriorities={setPriorities} strategy={strategy} go={setView} />
+        )}
+
+        {view === "pipeline" && (
+          <Module title="Pipeline" sub="Wholesale prospects across channels, tiers, and stages"
+            actions={
+              <>
+                <div className="seg">
+                  <button className={pipeMode === "board" ? "on" : ""} onClick={() => setPipeMode("board")}>Board</button>
+                  <button className={pipeMode === "table" ? "on" : ""} onClick={() => setPipeMode("table")}>Table</button>
+                </div>
+                <select className="filter" value={pipeFilter} onChange={(e) => setPipeFilter(e.target.value)}>
+                  <option>All</option>
+                  {PIPE_CHANNEL.map((c) => <option key={c}>{c}</option>)}
+                </select>
+                <button className="btn primary" onClick={() => setEditing({ kind: "pipeline", record: null })}>+ New</button>
+              </>
+            }>
+            {(() => {
+              const rows = pipeFilter === "All" ? pipeline : pipeline.filter((p) => p.channel === pipeFilter);
+              if (pipeMode === "table")
+                return <DataTable rows={rows}
+                  cols={[
+                    { k: "title", label: "Retailer", w: "20%" },
+                    { k: "city", label: "City" },
+                    { k: "channel", label: "Channel", render: (r) => <Badge value={r.channel} cmap={PIPE_CHANNEL_C} /> },
+                    { k: "tier", label: "Tier", render: (r) => <Badge value={r.tier} cmap={PIPE_TIER_C} /> },
+                    { k: "stage", label: "Stage", render: (r) => <Badge value={r.stage} cmap={PIPE_STAGE_C} /> },
+                    { k: "region", label: "Region" },
+                    { k: "nextFollowUp", label: "Follow-up", render: (r) => fmtDate(r.nextFollowUp) || <span className="muted">—</span> },
+                    { k: "_sample", label: "Sample", render: (r) => (
+                      <button className="card-log" onClick={(e) => { e.stopPropagation(); markSample(r.id); }}>
+                        {r.sampleSent ? fmtDate(r.sampleSent) : "Log"}
+                      </button>
+                    ) },
+                  ]}
+                  onEdit={(r) => setEditing({ kind: "pipeline", record: r })}
+                  onDelete={(id) => deleteRecord("pipeline", id)} />;
+              return (
+                <div className="board">
+                  {PIPE_STAGE.map((stage) => {
+                    const items = rows.filter((p) => p.stage === stage);
+                    return (
+                      <div className="col" key={stage}>
+                        <div className="col-head">
+                          <Badge value={stage} cmap={PIPE_STAGE_C} /><span className="count">{items.length}</span>
+                        </div>
+                        <div className="col-body">
+                          {items.map((p) => (
+                            <div className="card" key={p.id} onClick={() => setEditing({ kind: "pipeline", record: p })}>
+                              <div className="card-title">{p.title}</div>
+                              <div className="card-tags">
+                                <Badge value={p.channel} cmap={PIPE_CHANNEL_C} />
+                                <Badge value={p.tier} cmap={PIPE_TIER_C} />
+                              </div>
+                              {p.nextFollowUp && <div className="card-meta">Follow-up {fmtDate(p.nextFollowUp)}</div>}
+                              <div className="card-actions" onClick={(e) => e.stopPropagation()}>
+                                <button className="card-log" onClick={() => markSample(p.id)}>
+                                  {p.sampleSent ? "Sample " + fmtDate(p.sampleSent) : "Log sample"}
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                          {!items.length && <div className="col-empty">—</div>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+          </Module>
+        )}
+
+        {view === "tasks" && (
+          <Module title="Tasks" sub="Active workstream management"
+            actions={
+              <>
+                <select className="filter" value={taskFilter} onChange={(e) => setTaskFilter(e.target.value)}>
+                  <option>All</option>
+                  {TASK_STATUS.map((s) => <option key={s}>{s}</option>)}
+                </select>
+                <button className="btn primary" onClick={() => setEditing({ kind: "tasks", record: null })}>+ New</button>
+              </>
+            }>
+            <DataTable
+              rows={taskFilter === "All" ? tasks : tasks.filter((t) => t.status === taskFilter)}
+              cols={[
+                { k: "title", label: "Task", w: "34%" },
+                { k: "status", label: "Status", render: (r) => <Badge value={r.status} cmap={TASK_STATUS_C} /> },
+                { k: "priority", label: "Priority", render: (r) => <Badge value={r.priority} cmap={TASK_PRIORITY_C} /> },
+                { k: "project", label: "Project", render: (r) => <Badge value={r.project} fallback="blue" /> },
+                { k: "owner", label: "Owner" },
+                { k: "due", label: "Due", render: (r) => fmtDate(r.due) || <span className="muted">—</span> },
+              ]}
+              onEdit={(r) => setEditing({ kind: "tasks", record: r })}
+              onDelete={(id) => deleteRecord("tasks", id)} />
+          </Module>
+        )}
+
+        {view === "strategy" && (
+          <Module title="Strategy" sub="What's working, what's not, and the next move"
+            actions={<button className="btn primary" onClick={() => setEditing({ kind: "strategy", record: null })}>+ New</button>}>
+            <div className="prio-strip">
+              <span className="eyebrow">Current priorities</span>
+              <div className="prio-list">
+                {priorities.map((p, i) => (
+                  <div className="prio" key={i}><span className="prio-n">{i + 1}</span><span>{p || <span className="muted">Set a priority</span>}</span></div>
+                ))}
+              </div>
+            </div>
+            <DataTable rows={strategy}
+              cols={[
+                { k: "title", label: "Item", w: "24%" },
+                { k: "status", label: "Status", render: (r) => <Badge value={r.status} cmap={STRAT_STATUS_C} /> },
+                { k: "category", label: "Category", render: (r) => <Badge value={r.category} cmap={STRAT_CATEGORY_C} /> },
+                { k: "priority", label: "Priority", render: (r) => <Badge value={r.priority} cmap={STRAT_PRIORITY_C} /> },
+                { k: "action", label: "Next step", render: (r) => <span className="clip">{r.action || "—"}</span> },
+              ]}
+              onEdit={(r) => setEditing({ kind: "strategy", record: r })}
+              onDelete={(id) => deleteRecord("strategy", id)} />
+          </Module>
+        )}
+
+        {view === "shows" && (
+          <Module title="Trade Shows" sub="Plan, budget, and track every show"
+            actions={<button className="btn primary" onClick={() => setEditing({ kind: "shows", record: null })}>+ New</button>}>
+            {!shows.length ? <div className="empty">No shows yet. Use <b>New</b> to plan one.</div> : (
+              <div className="show-grid">
+                {shows.map((s) => (
+                  <div className="show-card" key={s.id} onClick={() => setEditing({ kind: "shows", record: s })}>
+                    <div className="show-top"><Badge value={s.status} cmap={SHOW_STATUS_C} />{s.date && <span className="show-date">{fmtDate(s.date)}</span>}</div>
+                    <div className="show-title">{s.title}</div>
+                    {s.location && <div className="show-loc">{s.location}</div>}
+                    {s.goal && <div className="show-goal">{s.goal}</div>}
+                    <div className="show-foot">{s.budget ? "Budget: " + s.budget : <span className="muted">No budget set</span>}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Module>
+        )}
+
+        {view === "notes" && (
+          <Module title="Notes" sub="Decisions, meetings, and context"
+            actions={<button className="btn primary" onClick={() => setEditing({ kind: "notes", record: null })}>+ New</button>}>
+            {!notes.length ? <div className="empty">No notes yet. Use <b>New</b> to capture one.</div> : (
+              <div className="notes-split">
+                <div className="notes-list">
+                  {notes.map((n) => (
+                    <button key={n.id} className={"note-row" + ((noteSel || notes[0].id) === n.id ? " active" : "")} onClick={() => setNoteSel(n.id)}>
+                      <div className="note-row-top"><Badge value={n.tag} cmap={NOTE_TAG_C} /><span className="note-date">{fmtDate(n.date)}</span></div>
+                      <div className="note-row-title">{n.title}</div>
+                    </button>
+                  ))}
+                </div>
+                {(() => {
+                  const sel = notes.find((n) => n.id === (noteSel || notes[0].id)) || notes[0];
+                  return (
+                    <div className="note-detail">
+                      <div className="note-detail-head">
+                        <div><Badge value={sel.tag} cmap={NOTE_TAG_C} /> <span className="muted">{fmtDate(sel.date)}</span></div>
+                        <div className="note-actions">
+                          <button className="btn ghost sm" onClick={() => setEditing({ kind: "notes", record: sel })}>Edit</button>
+                          <button className="btn ghost sm" onClick={() => deleteRecord("notes", sel.id)}>Delete</button>
+                        </div>
+                      </div>
+                      <h2 className="note-h">{sel.title}</h2>
+                      <div className="note-body">{sel.body || <span className="muted">No content.</span>}</div>
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
+          </Module>
+        )}
+      </main>
+
+      {editing && (
+        <EditModal kind={editing.kind} record={editing.record}
+          onSave={(form) => saveRecord(editing.kind, form)} onClose={() => setEditing(null)} />
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------ module shell ----------------------------- */
+function Module({ title, sub, actions, children }) {
+  return (
+    <>
+      <header className="topbar">
+        <div><h1 className="module-title">{title}</h1><p className="module-sub">{sub}</p></div>
+        <div className="topbar-actions">{actions}</div>
+      </header>
+      <div className="module-body">{children}</div>
+    </>
+  );
+}
+
+/* -------------------------------- dashboard ------------------------------ */
+function Dashboard({ kpi, priorities, setPriorities, strategy, go }) {
+  const pct = Math.min(100, Math.round((kpi.samplesThisWeek / SAMPLES_GOAL) * 100));
+  const [editP, setEditP] = useState(false);
+  return (
+    <>
+      <header className="topbar">
+        <div>
+          <span className="eyebrow">Command center</span>
+          <h1 className="module-title serif">Retail Hub</h1>
+        </div>
+      </header>
+      <div className="module-body">
+        {/* KPI instrument strip */}
+        <div className="kpi-strip">
+          <div className="gauge">
+            <div className="gauge-head">
+              <span className="eyebrow">Samples this week</span>
+              <span className="gauge-num">{kpi.samplesThisWeek}<span className="gauge-goal"> / {SAMPLES_GOAL}</span></span>
+            </div>
+            <div className="gauge-bar"><div className="gauge-fill" style={{ width: pct + "%" }} /></div>
+            <div className="gauge-foot">{pct}% of weekly pace</div>
+            <div className="gauge-foot2">{kpi.touchesThisWeek} {kpi.touchesThisWeek === 1 ? "touch" : "touches"} logged this week</div>
+          </div>
+          <div className="stat"><span className="stat-num">{kpi.active}</span><span className="stat-label">Active prospects</span></div>
+          <div className="stat"><span className="stat-num">{kpi.converted}</span><span className="stat-label">Converted</span></div>
+          <div className="stat"><span className="stat-num">{kpi.openTasks}</span><span className="stat-label">Open tasks</span></div>
+          <div className="stat"><span className="stat-num good">{kpi.working}</span><span className="stat-label">Working tactics</span></div>
+        </div>
+
+        <div className="dash-grid">
+          {/* Priorities */}
+          <section className="panel">
+            <div className="panel-head">
+              <h3>Current priorities</h3>
+              <button className="btn ghost sm" onClick={() => setEditP((v) => !v)}>{editP ? "Done" : "Edit"}</button>
+            </div>
+            <div className="panel-body">
+              {priorities.map((p, i) => (
+                <div className="prio" key={i}>
+                  <span className="prio-n">{i + 1}</span>
+                  {editP
+                    ? <input className="prio-input" value={p} onChange={(e) => setPriorities((arr) => arr.map((x, j) => (j === i ? e.target.value : x)))} />
+                    : <span>{p || <span className="muted">Set a priority</span>}</span>}
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {/* Pipeline funnel */}
+          <section className="panel">
+            <div className="panel-head"><h3>Pipeline by stage</h3>
+              <button className="btn ghost sm" onClick={() => go("pipeline")}>Open</button></div>
+            <div className="panel-body">
+              {PIPE_STAGE.map((s) => {
+                const n = kpi.stageCounts[s] || 0;
+                const max = Math.max(1, ...Object.values(kpi.stageCounts));
+                const c = tag(PIPE_STAGE_C[s]);
+                return (
+                  <div className="funnel-row" key={s}>
+                    <span className="funnel-label">{s}</span>
+                    <span className="funnel-track"><span className="funnel-fill" style={{ width: (n / max) * 100 + "%", background: c.fg }} /></span>
+                    <span className="funnel-n">{n}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+
+          {/* Tasks by status */}
+          <section className="panel">
+            <div className="panel-head"><h3>Tasks by status</h3>
+              <button className="btn ghost sm" onClick={() => go("tasks")}>Open</button></div>
+            <div className="panel-body chips">
+              {TASK_STATUS.map((s) => (
+                <div className="chip" key={s}><Badge value={s} cmap={TASK_STATUS_C} /><span className="chip-n">{kpi.taskCounts[s] || 0}</span></div>
+              ))}
+            </div>
+          </section>
+
+          {/* Strategy snapshot */}
+          <section className="panel">
+            <div className="panel-head"><h3>Strategy signal</h3>
+              <button className="btn ghost sm" onClick={() => go("strategy")}>Open</button></div>
+            <div className="panel-body">
+              <div className="signal"><span className="dot good" /> {kpi.working} working</div>
+              <div className="signal"><span className="dot bad" /> {kpi.notWorking} not working</div>
+              <div className="signal-list">
+                {strategy.filter((s) => s.status === "Not Working").slice(0, 3).map((s) => (
+                  <div className="signal-item" key={s.id}>{s.title}<span className="signal-action">{s.action}</span></div>
+                ))}
+                {!strategy.some((s) => s.status === "Not Working") && <div className="muted">No red flags right now.</div>}
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </>
+  );
+}
+
+/* ---------------------------------- CSS ---------------------------------- */
+const CSS = `
+:root{
+  --canvas:#F3F3F5; --paper:#FFFFFF; --line:#E4E3E8; --line-soft:#EEEDF1;
+  --ink:#18181B; --ink-2:#2C2C32; --text:#1F1F23; --muted:#71717A;
+  --accent:#7C3AED; --accent-ink:#6D28D9; --accent-soft:#EBE3FB;
+  --good:#2F7A4F; --bad:#C0392B; --warn:#C99A12;
+  --r:10px; --r-sm:7px; --shadow:0 1px 2px rgba(24,24,27,.05),0 4px 16px rgba(24,24,27,.05);
+}
+*{box-sizing:border-box}
+.app,.boot{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--text)}
+.app{display:flex;min-height:100vh;background:var(--canvas)}
+.serif{font-family:Georgia,"Times New Roman",serif}
+.muted{color:var(--muted)}
+.eyebrow{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--accent-ink);font-weight:700}
+.good{color:var(--good)}
+
+/* boot */
+.boot{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;background:var(--canvas)}
+.boot-mark{font-size:30px;font-weight:800;letter-spacing:.34em;color:var(--ink);padding-left:.34em}
+.boot-sub{margin-top:10px;color:var(--muted);font-size:13px}
+
+/* rail */
+.rail{width:228px;flex:0 0 228px;background:var(--ink);color:#E8EAEF;display:flex;flex-direction:column;padding:22px 14px;position:sticky;top:0;height:100vh}
+.brand{padding:6px 10px 22px}
+.wordmark{font-size:21px;font-weight:800;letter-spacing:.36em;padding-left:.36em;color:#fff}
+.brand-sub{font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:#9AA3B5;margin-top:6px;padding-left:.04em}
+.nav{display:flex;flex-direction:column;gap:2px;flex:1}
+.nav-item{display:flex;align-items:center;gap:11px;background:none;border:0;color:#B9C0CF;font-size:14px;text-align:left;padding:10px 12px;border-radius:var(--r-sm);cursor:pointer;font-weight:500;position:relative;transition:background .12s,color .12s}
+.nav-item:hover{background:rgba(255,255,255,.06);color:#fff}
+.nav-item.active{background:rgba(255,255,255,.10);color:#fff}
+.nav-item.active::before{content:"";position:absolute;left:0;top:9px;bottom:9px;width:3px;border-radius:3px;background:var(--accent)}
+.nav-icon{width:18px;text-align:center;font-size:13px;opacity:.85}
+.rail-foot{padding-top:14px;border-top:1px solid rgba(255,255,255,.08)}
+.reset{background:none;border:1px solid rgba(255,255,255,.16);color:#9AA3B5;font-size:12px;padding:8px 10px;border-radius:var(--r-sm);width:100%;cursor:pointer}
+.reset:hover{color:#fff;border-color:rgba(255,255,255,.3)}
+
+/* main */
+.main{flex:1;min-width:0;display:flex;flex-direction:column}
+.topbar{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;padding:26px 32px 18px;flex-wrap:wrap}
+.module-title{font-size:26px;font-weight:700;margin:2px 0 0;letter-spacing:-.01em;color:var(--ink)}
+.module-title.serif{font-size:30px;font-weight:600}
+.module-sub{margin:5px 0 0;color:var(--muted);font-size:13px}
+.topbar-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.module-body{padding:6px 32px 40px;flex:1}
+
+/* buttons + inputs */
+.btn{font-size:13px;font-weight:600;padding:9px 15px;border-radius:var(--r-sm);border:1px solid var(--line);background:var(--paper);cursor:pointer;color:var(--text);transition:.12s}
+.btn.sm{padding:5px 10px;font-size:12px}
+.btn.primary{background:var(--ink);color:#fff;border-color:var(--ink)}
+.btn.primary:hover{background:var(--ink-2)}
+.btn.primary:disabled{opacity:.4;cursor:not-allowed}
+.btn.ghost{background:transparent}
+.btn.ghost:hover{background:#fff;border-color:var(--accent);color:var(--accent)}
+.icon-btn{background:none;border:0;cursor:pointer;font-size:14px;color:var(--muted);padding:4px;border-radius:6px}
+.icon-btn:hover{color:var(--text);background:var(--line-soft)}
+.icon-btn.sm{font-size:13px}
+.filter,select.filter{font-size:13px;padding:8px 11px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--paper);color:var(--text);cursor:pointer}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:var(--r-sm);overflow:hidden;background:var(--paper)}
+.seg button{border:0;background:none;padding:8px 14px;font-size:13px;cursor:pointer;color:var(--muted);font-weight:600}
+.seg button.on{background:var(--ink);color:#fff}
+
+/* table */
+.table-wrap{background:var(--paper);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;box-shadow:var(--shadow)}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+thead th{text-align:left;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:700;padding:13px 16px;border-bottom:1px solid var(--line);background:#FBF9F5}
+tbody td{padding:13px 16px;border-bottom:1px solid var(--line-soft);vertical-align:middle}
+tbody tr{cursor:pointer;transition:background .1s}
+tbody tr:hover{background:#FBF9F4}
+tbody tr:last-child td{border-bottom:0}
+td:first-child{font-weight:600;color:var(--ink)}
+.row-actions{text-align:right;width:44px}.row-actions-h{width:44px}
+.clip{display:inline-block;max-width:340px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom;color:var(--muted)}
+.empty{background:var(--paper);border:1px dashed var(--line);border-radius:var(--r);padding:48px;text-align:center;color:var(--muted);font-size:14px}
+
+/* badge */
+.badge{display:inline-block;font-size:12px;font-weight:600;padding:3px 9px;border-radius:20px;line-height:1.5;white-space:nowrap}
+
+/* board */
+.board{display:flex;gap:14px;overflow-x:auto;padding-bottom:8px}
+.col{flex:0 0 248px;background:var(--line-soft);border-radius:var(--r);padding:10px;min-height:120px}
+.col-head{display:flex;align-items:center;justify-content:space-between;padding:4px 4px 10px}
+.count{font-size:12px;color:var(--muted);font-weight:700}
+.col-body{display:flex;flex-direction:column;gap:8px}
+.card{background:var(--paper);border:1px solid var(--line);border-radius:var(--r-sm);padding:11px;cursor:pointer;box-shadow:var(--shadow);transition:.12s}
+.card:hover{border-color:var(--accent);transform:translateY(-1px)}
+.card-title{font-size:13.5px;font-weight:650;color:var(--ink);margin-bottom:8px}
+.card-tags{display:flex;gap:5px;flex-wrap:wrap}
+.card-meta{margin-top:8px;font-size:11.5px;color:var(--muted)}
+.card-actions{margin-top:9px;display:flex}
+.card-log{font-size:11.5px;font-weight:600;border:1px solid var(--line);background:var(--paper);color:var(--accent-ink);padding:4px 10px;border-radius:6px;cursor:pointer;transition:.12s;white-space:nowrap}
+.card-log:hover{border-color:var(--accent);background:var(--accent-soft)}
+.col-empty{color:var(--muted);font-size:13px;text-align:center;padding:8px}
+
+/* priorities strip in strategy */
+.prio-strip{background:var(--paper);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;margin-bottom:16px;box-shadow:var(--shadow)}
+.prio-list{display:flex;gap:22px;flex-wrap:wrap;margin-top:10px}
+.prio{display:flex;align-items:center;gap:10px;font-size:14px;font-weight:550;color:var(--ink)}
+.prio-n{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:var(--accent-soft);color:var(--accent-ink);font-size:12px;font-weight:800;flex:0 0 22px}
+.prio-input{flex:1;min-width:200px;font-size:14px;padding:6px 9px;border:1px solid var(--line);border-radius:6px}
+
+/* trade show cards */
+.show-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(248px,1fr));gap:14px}
+.show-card{background:var(--paper);border:1px solid var(--line);border-radius:var(--r);padding:16px;cursor:pointer;box-shadow:var(--shadow);transition:.12s}
+.show-card:hover{border-color:var(--accent);transform:translateY(-1px)}
+.show-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:11px}
+.show-date{font-size:12px;color:var(--muted);font-weight:600}
+.show-title{font-size:16px;font-weight:700;color:var(--ink)}
+.show-loc{font-size:12.5px;color:var(--muted);margin-top:3px}
+.show-goal{font-size:13px;margin-top:10px;color:var(--text)}
+.show-foot{margin-top:12px;padding-top:10px;border-top:1px solid var(--line-soft);font-size:12px;color:var(--text);font-weight:600}
+
+/* notes */
+.notes-split{display:grid;grid-template-columns:280px 1fr;gap:16px}
+.notes-list{display:flex;flex-direction:column;gap:6px}
+.note-row{text-align:left;background:var(--paper);border:1px solid var(--line);border-radius:var(--r-sm);padding:11px 13px;cursor:pointer;transition:.12s}
+.note-row:hover{border-color:var(--accent)}
+.note-row.active{border-color:var(--ink);background:#FBF9F4}
+.note-row-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.note-date{font-size:11px;color:var(--muted)}
+.note-row-title{font-size:13.5px;font-weight:650;color:var(--ink)}
+.note-detail{background:var(--paper);border:1px solid var(--line);border-radius:var(--r);padding:24px 26px;box-shadow:var(--shadow)}
+.note-detail-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.note-actions{display:flex;gap:8px}
+.note-h{font-size:22px;margin:0 0 14px;color:var(--ink);font-weight:700}
+.note-body{white-space:pre-wrap;line-height:1.65;font-size:14.5px;color:var(--text)}
+
+/* kpi strip */
+.kpi-strip{display:grid;grid-template-columns:1.7fr 1fr 1fr 1fr 1fr;gap:14px;margin-bottom:18px}
+.gauge,.stat{background:var(--paper);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;box-shadow:var(--shadow)}
+.gauge-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:12px}
+.gauge-num{font-size:26px;font-weight:800;color:var(--ink);font-variant-numeric:tabular-nums}
+.gauge-goal{font-size:15px;color:var(--muted);font-weight:600}
+.gauge-bar{height:9px;background:var(--line-soft);border-radius:20px;overflow:hidden}
+.gauge-fill{height:100%;background:linear-gradient(90deg,var(--accent),#A472F2);border-radius:20px;transition:width .5s ease}
+.gauge-foot{margin-top:9px;font-size:12px;color:var(--muted)}
+.gauge-foot2{margin-top:3px;font-size:11.5px;color:var(--muted);opacity:.85}
+.stat{display:flex;flex-direction:column;justify-content:center}
+.stat-num{font-size:28px;font-weight:800;color:var(--ink);font-variant-numeric:tabular-nums;line-height:1}
+.stat-num.good{color:var(--good)}
+.stat-label{font-size:11.5px;color:var(--muted);margin-top:7px;letter-spacing:.02em}
+
+/* dashboard grid */
+.dash-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.panel{background:var(--paper);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden}
+.panel-head{display:flex;align-items:center;justify-content:space-between;padding:15px 18px;border-bottom:1px solid var(--line-soft)}
+.panel-head h3{margin:0;font-size:14px;font-weight:700;color:var(--ink)}
+.panel-body{padding:16px 18px;display:flex;flex-direction:column;gap:11px}
+.funnel-row{display:flex;align-items:center;gap:11px}
+.funnel-label{font-size:12px;color:var(--text);flex:0 0 130px}
+.funnel-track{flex:1;height:8px;background:var(--line-soft);border-radius:20px;overflow:hidden}
+.funnel-fill{display:block;height:100%;border-radius:20px;min-width:2px;opacity:.85;transition:width .4s}
+.funnel-n{font-size:12px;font-weight:700;color:var(--ink);width:20px;text-align:right}
+.chips{flex-direction:row;flex-wrap:wrap;gap:8px}
+.chip{display:flex;align-items:center;gap:7px;background:var(--line-soft);border-radius:20px;padding:5px 11px 5px 6px}
+.chip-n{font-size:13px;font-weight:800;color:var(--ink)}
+.signal{display:flex;align-items:center;gap:9px;font-size:13.5px;font-weight:600;color:var(--ink)}
+.dot{width:9px;height:9px;border-radius:50%}.dot.good{background:var(--good)}.dot.bad{background:var(--bad)}
+.signal-list{margin-top:6px;display:flex;flex-direction:column;gap:9px}
+.signal-item{font-size:13px;font-weight:600;color:var(--ink);display:flex;flex-direction:column;gap:2px;padding-left:18px;border-left:2px solid var(--bad)}
+.signal-action{font-size:12px;font-weight:400;color:var(--muted)}
+
+/* modal */
+.overlay{position:fixed;inset:0;background:rgba(24,24,27,.45);display:flex;align-items:flex-start;justify-content:center;padding:48px 16px;z-index:50;overflow-y:auto;backdrop-filter:blur(2px)}
+.modal{background:var(--paper);border-radius:14px;width:100%;max-width:520px;box-shadow:0 24px 64px rgba(27,36,53,.28);overflow:hidden}
+.modal-head{display:flex;align-items:center;justify-content:space-between;padding:18px 22px;border-bottom:1px solid var(--line-soft)}
+.modal-body{padding:18px 22px;display:flex;flex-direction:column;gap:14px;max-height:60vh;overflow-y:auto}
+.field{display:flex;flex-direction:column;gap:6px}
+.field-label{font-size:12px;font-weight:600;color:var(--muted)}
+.field input,.field select,.field textarea{font-size:14px;padding:9px 11px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--paper);color:var(--text);font-family:inherit;width:100%}
+.field input:focus,.field select:focus,.field textarea:focus{outline:2px solid var(--accent);outline-offset:-1px;border-color:var(--accent)}
+.field textarea{resize:vertical;line-height:1.5}
+.modal-foot{display:flex;justify-content:flex-end;gap:10px;padding:16px 22px;border-top:1px solid var(--line-soft);background:#FBF9F5}
+
+@media (max-width:880px){
+  .app{flex-direction:column}
+  .rail{width:100%;flex:none;height:auto;position:static;flex-direction:row;align-items:center;padding:12px;overflow-x:auto;gap:8px}
+  .brand{padding:0 10px 0 4px;flex:0 0 auto}.wordmark{font-size:16px}.brand-sub{display:none}
+  .nav{flex-direction:row;gap:4px}.nav-item{padding:8px 11px;white-space:nowrap}.nav-item.active::before{display:none}
+  .rail-foot{display:none}
+  .topbar,.module-body{padding-left:16px;padding-right:16px}
+  .kpi-strip{grid-template-columns:1fr 1fr}
+  .dash-grid{grid-template-columns:1fr}
+  .notes-split{grid-template-columns:1fr}
+}
+`;
+
+
+const _root = ReactDOM.createRoot(document.getElementById("root"));
+_root.render(<App />);
+</script>
+
+<script>
+// Plain-JS data backup and restore, independent of the app, so your data is always portable.
+(function(){
+  function snapshot(){
+    var out = {};
+    for (var i=0;i<localStorage.length;i++){
+      var k = localStorage.key(i);
+      if (k && k.indexOf("asset:") === 0) out[k] = localStorage.getItem(k);
+    }
+    return out;
+  }
+  document.getElementById("backupBtn").addEventListener("click", function(){
+    var data = JSON.stringify({ app:"asset-retail-hub", saved:new Date().toISOString(), data:snapshot() }, null, 2);
+    var blob = new Blob([data], {type:"application/json"});
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "asset-retail-hub-backup-" + new Date().toISOString().slice(0,10) + ".json";
+    a.click();
+  });
+  document.getElementById("restoreBtn").addEventListener("click", function(){
+    document.getElementById("restoreInput").click();
+  });
+  document.getElementById("restoreInput").addEventListener("change", function(e){
+    var file = e.target.files[0]; if(!file) return;
+    var r = new FileReader();
+    r.onload = function(){
+      try {
+        var parsed = JSON.parse(r.result);
+        var d = parsed.data || parsed;
+        if (!confirm("Restore this backup? It will replace the data currently in this workbook.")) return;
+        Object.keys(d).forEach(function(k){ localStorage.setItem(k, d[k]); });
+        location.reload();
+      } catch(err){ alert("That file could not be read as a valid backup."); }
+    };
+    r.readAsText(file);
+  });
+})();
+</script>
+</body>
+</html>
